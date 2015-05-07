@@ -1,0 +1,211 @@
+<?php
+
+/**
+ * Implementation of hook_field_settings_alter().
+ */
+function file_resup_field_settings_alter(&$settings, $op, $field) {
+  $field_type = isset($field['widget_type']) ? $field['widget_type'] : $field['type'];
+  if ($field_type != 'filefield') {
+    return;
+  }
+
+  // Add our new options to the list of settings to be saved.
+  if ($op == 'save') {
+    $settings = array_merge($settings, array('file_resup_active_elements'));
+  }
+
+  // Add the additional settings to the form.
+  if ($op == 'form') {
+    $settings['file_resup_active_elements'] = array(
+      '#type' => 'select',
+      '#options' => file_resup_active_element_options(),
+      '#title' => t('Resumable uploads'),
+      '#default_value' => (int) $field['file_resup_active_elements'],
+      '#description' => t('This option adds resumable uploads.'),
+    );
+  }
+}
+
+function file_resup_active_element_options() {
+  return array(
+    '0' => t('Skip this field'),
+    '1' => t('Use file resumable uploads'),
+  );
+}
+
+/**
+ * Implementation of hook_elements().
+ */
+function file_resup_elements() {
+  $elements = array();
+
+  foreach (file_resup_filefield_widgets() as $widget_type => $widget) {
+    $elements[$widget_type]['#after_build'][] = 'file_resup_process';
+    $elements[$widget_type]['#element_validate'][] = 'file_resup_validate';
+  }
+
+  //dsm($elements, 'filefield_elements() $elements=');
+  return $elements;
+}
+
+// TODO do something useful on preview; currently this just silently drops any uploaded files so previewing is disabled
+function file_resup_form_alter(&$form, &$form_state, $form_id) {
+  if ($form['#id'] == 'node-form' && isset($form['#field_info'])) {
+    foreach ($form['#field_info'] as $field_name => $field_info) {
+      if (isset($field_info['file_resup_active_elements']) && $field_info['file_resup_active_elements'] == TRUE) {
+        unset($form['buttons']['preview']);
+      }
+    }
+  }
+}
+
+function file_resup_filefield_widgets() {
+  static $filefield_widgets = NULL;
+  if (!isset($filefield_widgets)) {
+    $filefield_widgets = array();
+    foreach (_content_widget_types() as $key => $widget) {
+      if (in_array('filefield', $widget['field types'])) {
+        $filefield_widgets[$key] = $widget['label'];
+      }
+    }
+  }
+  return $filefield_widgets;
+}
+
+function file_resup_validate(&$element, &$form_state) {
+  global $user;
+
+  $field = content_fields($element['#field_name'], $element['#type_name']);
+  $widget = $field['widget'];
+
+  //dsm(array('$element' => $element, '$form_state' => $form_state, '$field' => $field, '$widget' => $widget, '$_POST' => $_POST), 'file_resup_validate()');
+  if (isset($_POST['uploader_count']) && $_POST['uploader_count']) {
+    $plupload_dir = '/tmp/plupload/';
+    for ($i=0; $i<$_POST['uploader_count']; $i++) {
+      if (isset($form_state['plupload_file_moved'][$i]) || $form_state['clicked_button']['#id'] == 'edit-preview') {
+        continue;
+      }
+      $filename = $_POST['uploader_' . $i . '_name'];
+      // security check (note: changing this requires also changing upload.php)
+      $filename = preg_replace('/[^\w\._]+/', '_', $filename);
+      $filename = $plupload_dir . $filename;
+      $destination_dir = file_directory_path();
+      if (isset($widget['file_path'])) {
+        $destination_dir .= '/' . $widget['file_path'];
+        file_check_directory($destination_dir, $mode = FILE_CREATE_DIRECTORY);
+      }
+      $name = basename($filename);
+      if (!file_move($filename, $destination_dir, FILE_EXISTS_RENAME)) {
+        drupal_set_message("Failed to move file: $filename", 'error');
+      }
+      else {
+        $file_details = stat($filename);
+        $filesize = $file_details['size'];
+        // Build the file object
+        $file_obj = new stdClass();
+        $file_obj->filename = $name;
+        $file_obj->filepath = $filename;
+        $file_obj->filemime =  file_get_mimetype($name);
+        $file_obj->filesize = $filesize;
+        $file_obj->filesource = $name;
+        $file_obj->uid = $user->uid;
+        $file_obj->status = FILE_STATUS_TEMPORARY;
+        $file_obj->timestamp = time();
+        $file_obj->list = TRUE;
+        $file_obj->data = array('description' => '');
+        $file_obj->new = TRUE;
+
+        // Save file to files table
+        drupal_write_record('files', $file_obj);
+
+        // change file status to permanent
+        file_set_status($file_obj, FILE_STATUS_PERMANENT);
+        //dsm($file_obj, '$file_obj');
+        $form_state['values'][$element['#field_name']][] = (array) $file_obj;
+        $form_state['plupload_file_moved'][$i] = TRUE;
+      }
+    }
+  }
+}
+
+/**
+ * Process function for insert-enabled fields.
+ */
+function file_resup_process($element, $edit) {
+  $item = $element['#value'];
+  $field = content_fields($element['#field_name'], $element['#type_name']);
+
+  // Not a filefield or settings yet.
+  if ($field['type'] != 'filefield') {
+    return $element;
+  }
+
+  if (isset($field['file_resup_active_elements'])) {
+    _file_resup_process_resup_elements($element, $field);
+  }
+  return $element;
+}
+
+function _file_resup_process_resup_elements(&$element, $field) {
+  // 0 == Skip
+  if (!empty($field['file_resup_active_elements']) && $element['#default_value']['fid'] == 0) {
+    $session_id = session_id();
+    $widget = $field['widget'];
+    //dsm(array('$element' => $element, '$field' => $field, '$widget' => $widget), '_file_resup_process_resup_elements()');
+    $base_path = base_path();
+    $path = drupal_get_path('module', 'file_resup');
+    $extensions_setting = $max_size_setting = '';
+    if ($widget['max_filesize_per_file']) {
+      $max_size = parse_size($widget['max_filesize_per_file']);
+      $max_size_setting = "max_file_size : '$max_size' // Maximum file size";
+    }
+    if ($widget['file_extensions']) {
+      $extensions = str_replace(' ', ',', $widget['file_extensions']);
+      $extensions_setting = "mime_types: [ {title : 'Files', extensions : '$extensions'} ] // Specify what files to browse for";
+    }
+    if ($extensions_setting && $max_size_setting) {
+      // cf http://stackoverflow.com/questions/7246618/trailing-commas-in-javascript
+      $stupid_json_comma = ',';
+    }
+
+    $plupload_settings = <<<EOD
+$(function() {
+  // Setup html5 version
+  $("#uploader").pluploadQueue({
+    // General settings
+    runtimes : 'html5,flash,silverlight', // can't send sid with html4 runtime
+    url : '$base_path$path/upload.php',
+    chunk_size: '1mb',
+    rename : true,
+    dragdrop: true,
+    drop_element: true,
+    filters : {
+      $max_size_setting
+      $stupid_json_comma
+      $extensions_setting
+    },
+    flash_swf_url : '$base_path$path/js/Moxie.swf',
+    silverlight_xap_url : '$base_path$path/js/Moxie.xap',
+    multipart_params: {
+      sid: '$session_id',
+    }
+  });
+});
+EOD;
+
+    $field_id = str_replace('_', '-', $element['#field_name']);
+    $add_more_id = 'edit-' . $field_id . '-' . $field_id . '-add-more';
+    $buttons_item_id = $field_id . '-items';
+    drupal_set_html_head("<style type='text/css'>input#$add_more_id, #$buttons_item_id .filefield-upload, #$buttons_item_id .description { display: none; }</style>");
+    drupal_add_css($path .'/js/jquery.plupload.queue/css/jquery.plupload.queue.css');
+    drupal_add_js($path .'/js/moxie.js');
+    drupal_add_js($path .'/js/plupload.full.min.js');
+    drupal_add_js($path .'/js/jquery.plupload.queue/jquery.plupload.queue.js');
+    drupal_add_js($plupload_settings, 'inline');
+
+    $element['#prefix'] .= '<div id="uploader-max-size">Maximum file size: ' . $widget['max_filesize_per_file'] . '</div>';
+    $element['#suffix'] .= '<div id="uploader"><p>Your browser doesn´t have Flash, Silverlight or HTML5 support.</p></div>';
+
+  }
+}
+

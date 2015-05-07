@@ -1,0 +1,9 @@
+name = File Resumable Uploads
+description = ""
+core = 6.x
+package = CCK
+dependencies[] = filefield
+
+version = "6.x-1.0"
+core = "6.x"
+project = "file_resup"

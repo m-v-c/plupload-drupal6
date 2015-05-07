@@ -1,0 +1,10 @@
+file_resup.module:
+- handle removing files
+- handle preview intelligently
+
+for some reason adding fields to other content types is broken.
+
+upload.php:
+- do something other than loading sites/default/settings.php and regex'ing around for the db password
+- put an instance of this on the local media server and somehow do user authentication
+- make this upload directly to amazon s3 (see example directory & search stack exchange for "plupload amazon s3")
