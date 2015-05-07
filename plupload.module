@@ -3,7 +3,7 @@
 /**
  * Implementation of hook_field_settings_alter().
  */
-function file_resup_field_settings_alter(&$settings, $op, $field) {
+function plupload_field_settings_alter(&$settings, $op, $field) {
   $field_type = isset($field['widget_type']) ? $field['widget_type'] : $field['type'];
   if ($field_type != 'filefield') {
     return;
@@ -11,22 +11,22 @@ function file_resup_field_settings_alter(&$settings, $op, $field) {
 
   // Add our new options to the list of settings to be saved.
   if ($op == 'save') {
-    $settings = array_merge($settings, array('file_resup_active_elements'));
+    $settings = array_merge($settings, array('plupload_active_elements'));
   }
 
   // Add the additional settings to the form.
   if ($op == 'form') {
-    $settings['file_resup_active_elements'] = array(
+    $settings['plupload_active_elements'] = array(
       '#type' => 'select',
-      '#options' => file_resup_active_element_options(),
+      '#options' => plupload_active_element_options(),
       '#title' => t('Resumable uploads'),
-      '#default_value' => (int) $field['file_resup_active_elements'],
+      '#default_value' => (int) $field['plupload_active_elements'],
       '#description' => t('This option adds resumable uploads.'),
     );
   }
 }
 
-function file_resup_active_element_options() {
+function plupload_active_element_options() {
   return array(
     '0' => t('Skip this field'),
     '1' => t('Use file resumable uploads'),
@@ -36,12 +36,12 @@ function file_resup_active_element_options() {
 /**
  * Implementation of hook_elements().
  */
-function file_resup_elements() {
+function plupload_elements() {
   $elements = array();
 
-  foreach (file_resup_filefield_widgets() as $widget_type => $widget) {
-    $elements[$widget_type]['#after_build'][] = 'file_resup_process';
-    $elements[$widget_type]['#element_validate'][] = 'file_resup_validate';
+  foreach (plupload_filefield_widgets() as $widget_type => $widget) {
+    $elements[$widget_type]['#after_build'][] = 'plupload_process';
+    $elements[$widget_type]['#element_validate'][] = 'plupload_validate';
   }
 
   //dsm($elements, 'filefield_elements() $elements=');
@@ -49,17 +49,17 @@ function file_resup_elements() {
 }
 
 // TODO do something useful on preview; currently this just silently drops any uploaded files so previewing is disabled
-function file_resup_form_alter(&$form, &$form_state, $form_id) {
+function plupload_form_alter(&$form, &$form_state, $form_id) {
   if ($form['#id'] == 'node-form' && isset($form['#field_info'])) {
     foreach ($form['#field_info'] as $field_name => $field_info) {
-      if (isset($field_info['file_resup_active_elements']) && $field_info['file_resup_active_elements'] == TRUE) {
+      if (isset($field_info['plupload_active_elements']) && $field_info['plupload_active_elements'] == TRUE) {
         unset($form['buttons']['preview']);
       }
     }
   }
 }
 
-function file_resup_filefield_widgets() {
+function plupload_filefield_widgets() {
   static $filefield_widgets = NULL;
   if (!isset($filefield_widgets)) {
     $filefield_widgets = array();
@@ -72,13 +72,13 @@ function file_resup_filefield_widgets() {
   return $filefield_widgets;
 }
 
-function file_resup_validate(&$element, &$form_state) {
+function plupload_validate(&$element, &$form_state) {
   global $user;
 
   $field = content_fields($element['#field_name'], $element['#type_name']);
   $widget = $field['widget'];
 
-  //dsm(array('$element' => $element, '$form_state' => $form_state, '$field' => $field, '$widget' => $widget, '$_POST' => $_POST), 'file_resup_validate()');
+  //dsm(array('$element' => $element, '$form_state' => $form_state, '$field' => $field, '$widget' => $widget, '$_POST' => $_POST), 'plupload_validate()');
   if (isset($_POST['uploader_count']) && $_POST['uploader_count']) {
     $plupload_dir = '/tmp/plupload/';
     for ($i=0; $i<$_POST['uploader_count']; $i++) {
@@ -131,7 +131,7 @@ function file_resup_validate(&$element, &$form_state) {
 /**
  * Process function for insert-enabled fields.
  */
-function file_resup_process($element, $edit) {
+function plupload_process($element, $edit) {
   $item = $element['#value'];
   $field = content_fields($element['#field_name'], $element['#type_name']);
 
@@ -140,20 +140,20 @@ function file_resup_process($element, $edit) {
     return $element;
   }
 
-  if (isset($field['file_resup_active_elements'])) {
-    _file_resup_process_resup_elements($element, $field);
+  if (isset($field['plupload_active_elements'])) {
+    _plupload_process_resup_elements($element, $field);
   }
   return $element;
 }
 
-function _file_resup_process_resup_elements(&$element, $field) {
+function _plupload_process_resup_elements(&$element, $field) {
   // 0 == Skip
-  if (!empty($field['file_resup_active_elements']) && $element['#default_value']['fid'] == 0) {
+  if (!empty($field['plupload_active_elements']) && $element['#default_value']['fid'] == 0) {
     $session_id = session_id();
     $widget = $field['widget'];
-    //dsm(array('$element' => $element, '$field' => $field, '$widget' => $widget), '_file_resup_process_resup_elements()');
+    //dsm(array('$element' => $element, '$field' => $field, '$widget' => $widget), '_plupload_process_resup_elements()');
     $base_path = base_path();
-    $path = drupal_get_path('module', 'file_resup');
+    $path = drupal_get_path('module', 'plupload');
     $extensions_setting = $max_size_setting = '';
     if ($widget['max_filesize_per_file']) {
       $max_size = parse_size($widget['max_filesize_per_file']);

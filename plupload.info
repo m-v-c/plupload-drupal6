@@ -1,9 +1,9 @@
-name = File Resumable Uploads
-description = ""
+name = Plupload library integration
+description = "Integrates the plupload library for resumable upload of large files to filefield fields."
 core = 6.x
 package = CCK
 dependencies[] = filefield
 
 version = "6.x-1.0"
 core = "6.x"
-project = "file_resup"
+project = "plupload"
