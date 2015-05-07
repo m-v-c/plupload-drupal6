@@ -3,6 +3,7 @@ description = "Integrates the plupload library for resumable upload of large fil
 core = 6.x
 package = CCK
 dependencies[] = filefield
+dependencies[] = jquery_update
 
 version = "6.x-1.0"
 core = "6.x"

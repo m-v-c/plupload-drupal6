@@ -21,7 +21,7 @@ function plupload_field_settings_alter(&$settings, $op, $field) {
       '#options' => plupload_active_element_options(),
       '#title' => t('Resumable uploads'),
       '#default_value' => (int) $field['plupload_active_elements'],
-      '#description' => t('This option adds resumable uploads.'),
+      '#description' => t("This option adds resumable uploads via the plupload library. When in use, the maximum upload size specified above can be greater than PHP's maximum post and file upload sizes."),
     );
   }
 }
@@ -29,7 +29,7 @@ function plupload_field_settings_alter(&$settings, $op, $field) {
 function plupload_active_element_options() {
   return array(
     '0' => t('Skip this field'),
-    '1' => t('Use file resumable uploads'),
+    '1' => t('Use resumable file uploads'),
   );
 }
 
@@ -78,21 +78,27 @@ function plupload_validate(&$element, &$form_state) {
   $field = content_fields($element['#field_name'], $element['#type_name']);
   $widget = $field['widget'];
 
-  //dsm(array('$element' => $element, '$form_state' => $form_state, '$field' => $field, '$widget' => $widget, '$_POST' => $_POST), 'plupload_validate()');
-  if (isset($_POST['uploader_count']) && $_POST['uploader_count']) {
-    $plupload_dir = '/tmp/plupload/';
-    for ($i=0; $i<$_POST['uploader_count']; $i++) {
+  dsm(array('$element' => $element, '$form_state' => $form_state, '$field' => $field, '$widget' => $widget, '$_POST' => $_POST), 'plupload_validate()');
+  $field_id = 'uploader-' . str_replace('_', '-', $element['#field_name']);
+  if (isset($_POST[$field_id . '_count']) && $_POST[$field_id . '_count']) {
+    $plupload_dir = '/tmp/plupload';
+    if (!file_check_directory($plupload_dir, $mode = FILE_CREATE_DIRECTORY)) {
+      drupal_set_message("Failed to create temporary upload directory $plupload_dir", 'error');
+    }
+    for ($i=0; $i<$_POST[$field_id . '_count']; $i++) {
       if (isset($form_state['plupload_file_moved'][$i]) || $form_state['clicked_button']['#id'] == 'edit-preview') {
         continue;
       }
-      $filename = $_POST['uploader_' . $i . '_name'];
+      $filename = $_POST[$field_id . '_' . $i . '_name'];
       // security check (note: changing this requires also changing upload.php)
       $filename = preg_replace('/[^\w\._]+/', '_', $filename);
-      $filename = $plupload_dir . $filename;
+      $filename = $plupload_dir . '/' . $filename;
       $destination_dir = file_directory_path();
       if (isset($widget['file_path'])) {
         $destination_dir .= '/' . $widget['file_path'];
-        file_check_directory($destination_dir, $mode = FILE_CREATE_DIRECTORY);
+        if (!file_check_directory($destination_dir, $mode = FILE_CREATE_DIRECTORY)) {
+          drupal_set_message("Failed to create destination directory $destination_dir", 'error');
+        }
       }
       $name = basename($filename);
       if (!file_move($filename, $destination_dir, FILE_EXISTS_RENAME)) {
@@ -120,8 +126,13 @@ function plupload_validate(&$element, &$form_state) {
 
         // change file status to permanent
         file_set_status($file_obj, FILE_STATUS_PERMANENT);
-        //dsm($file_obj, '$file_obj');
-        $form_state['values'][$element['#field_name']][] = (array) $file_obj;
+        dsm($file_obj, '$file_obj');
+        if ($file_obj->fid) {
+          $form_state['values'][$element['#field_name']][] = (array) $file_obj;
+        }
+        else {
+          drupal_set_message("Failed to add file $filename to node: no valid fid", 'error');
+        }
         $form_state['plupload_file_moved'][$i] = TRUE;
       }
     }
@@ -147,11 +158,15 @@ function plupload_process($element, $edit) {
 }
 
 function _plupload_process_resup_elements(&$element, $field) {
-  // 0 == Skip
-  if (!empty($field['plupload_active_elements']) && $element['#default_value']['fid'] == 0) {
+  static $elements_processed;
+  if (!isset($elements_processed)) {
+    $elements_processed = array();
+  }
+  if (!empty($field['plupload_active_elements']) && $element['#default_value']['fid'] == 0 && !isset($elements_processed[$element['#field_name']])) {
+    $elements_processed[$element['#field_name']] = TRUE;
     $session_id = session_id();
     $widget = $field['widget'];
-    //dsm(array('$element' => $element, '$field' => $field, '$widget' => $widget), '_plupload_process_resup_elements()');
+    dsm(array('$element' => $element, '$field' => $field, '$widget' => $widget, '$elements_processed' => $elements_processed), '_plupload_process_resup_elements()');
     $base_path = base_path();
     $path = drupal_get_path('module', 'plupload');
     $extensions_setting = $max_size_setting = '';
@@ -168,10 +183,12 @@ function _plupload_process_resup_elements(&$element, $field) {
       $stupid_json_comma = ',';
     }
 
+    $field_id = str_replace('_', '-', $element['#field_name']);
+
     $plupload_settings = <<<EOD
 $(function() {
   // Setup html5 version
-  $("#uploader").pluploadQueue({
+  $("#uploader-$field_id").pluploadQueue({
     // General settings
     runtimes : 'html5,flash,silverlight', // can't send sid with html4 runtime
     url : '$base_path$path/upload.php',
@@ -188,23 +205,30 @@ $(function() {
     silverlight_xap_url : '$base_path$path/js/Moxie.xap',
     multipart_params: {
       sid: '$session_id',
+      field: '$field_id',
     }
   });
-});
+})(jQuery);
 EOD;
 
-    $field_id = str_replace('_', '-', $element['#field_name']);
     $add_more_id = 'edit-' . $field_id . '-' . $field_id . '-add-more';
     $buttons_item_id = $field_id . '-items';
-    drupal_set_html_head("<style type='text/css'>input#$add_more_id, #$buttons_item_id .filefield-upload, #$buttons_item_id .description { display: none; }</style>");
+    drupal_set_html_head("<style type='text/css'>input#$add_more_id, #$buttons_item_id .filefield-upload { display: none; }</style>");
     drupal_add_css($path .'/js/jquery.plupload.queue/css/jquery.plupload.queue.css');
-    drupal_add_js($path .'/js/moxie.js');
-    drupal_add_js($path .'/js/plupload.full.min.js');
-    drupal_add_js($path .'/js/jquery.plupload.queue/jquery.plupload.queue.js');
+    drupal_add_css($path .'/plupload.css');
+    drupal_add_js($path .'/js/moxie.js', 'theme');
+    drupal_add_js($path .'/js/plupload.full.min.js', 'theme');
+    drupal_add_js($path .'/js/jquery.plupload.queue/jquery.plupload.queue.js', 'theme');
     drupal_add_js($plupload_settings, 'inline');
 
-    $element['#prefix'] .= '<div id="uploader-max-size">Maximum file size: ' . $widget['max_filesize_per_file'] . '</div>';
-    $element['#suffix'] .= '<div id="uploader"><p>Your browser doesn´t have Flash, Silverlight or HTML5 support.</p></div>';
+    $max_filesize_per_file_setting = $widget['max_filesize_per_file'] ? $widget['max_filesize_per_file'] : t('Unlimited');
+    $element['#prefix'] .= '<div class="plupload-wrapper">';
+    $element['#suffix'] .= t('Maximum file size: %size', array('%size' => $max_filesize_per_file_setting));
+    if ($widget['file_extensions']) {
+      $element['#suffix'] .= '<br />' . t('Allowed extensions: %list', array('%list' => $widget['file_extensions']));
+    }
+    $element['#suffix'] .= sprintf('<div id="uploader-%s"><p>%s</p></div>', $field_id, t("Your browser doesn't have Flash, Silverlight or HTML5 support."));
+    $element['#suffix'] .= '</div>';
 
   }
 }
