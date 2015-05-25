@@ -73,7 +73,7 @@ if (isset($_REQUEST["name"])) {
 */
 }
 
-// Clean the fileName for security reasons
+// Clean the fileName for security reasons (note: changing this requires also changing plupload.module)
 $fileName = preg_replace('/[^\w\._]+/', '_', $fileName);
 
 $filePath = $targetDir . DIRECTORY_SEPARATOR . $fileName;
